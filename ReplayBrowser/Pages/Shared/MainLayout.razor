@@ -1,14 +1,17 @@
 ﻿@using Microsoft.AspNetCore.Components.Authorization
-@using Microsoft.EntityFrameworkCore
 @using ReplayBrowser.Data
 @using ReplayBrowser.Data.Models.Account
 @using ReplayBrowser.Helpers
+@using ReplayBrowser.Services
 @using ReplayBrowser.Services.ReplayParser
 @using Serilog
 @inherits LayoutComponentBase
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ReplayDbContext DbContext
-@inject Ss14ApiHelper Ss14ApiHelper
+@inject NavigationManager NavigationManager
+@inject NoticeHelper NoticeHelper
+@inject IHttpContextAccessor HttpContextAccessor
+@inject ProfilePregeneratorService ProfilePregeneratorService
 
 @code
 {
@@ -23,27 +26,13 @@
         {
             var guid = (Guid)AccountHelper.GetAccountGuid(authState)!;
             _account = DbContext.Accounts.FirstOrDefault(a => a.Guid == guid);
-            var data = await Ss14ApiHelper.FetchPlayerDataFromGuid(guid);
-
             if (_account == null)
             {
-                _account = new Account()
+                Log.Error("Account {Guid} is authenticated but not found in the database", guid);
+                NavigationManager.NavigateTo("account/redirect", new NavigationOptions()
                 {
-                    Guid = guid,
-                    Username = data.Username
-                };
-
-                DbContext.Accounts.Add(_account);
-                DbContext.SaveChanges();
-            
-                Log.Information("Created new account for {Guid} with username {Username}", guid, data.Username);
-            }
-        
-            if (_account.Username != data.Username)
-            {
-                _account.Username = data.Username;
-                await DbContext.SaveChangesAsync();
-                Log.Information("Updated username for account {Guid} to {Username}", guid, data.Username);
+                    ForceLoad = true
+                });
             }
         }
     }
@@ -55,17 +44,39 @@
 
 <div class="page">
     <main class="container my-5">
+        @foreach (var activeNotice in NoticeHelper.GetActiveNotices())
+        {
+            // See in cookies if we have already dismissed this notice
+            var dismissed = HttpContextAccessor.HttpContext != null && HttpContextAccessor.HttpContext.Request.Cookies.ContainsKey($"dismissed-notice-{activeNotice.Id}");
+            if (dismissed)
+                continue;
+            
+            <div class="alert alert-info" role="alert">
+                <h4 class="alert-heading">@activeNotice.Title</h4>
+                <p>@activeNotice.Message</p>
+                <button
+                    type="button"
+                    class="btn-close"
+                    data-bs-dismiss="alert"
+                    aria-label="Close"
+                    onclick="document.cookie = `dismissed-notice-${@activeNotice.Id}=true; expires=Fri, 31 Dec 9999 23:59:59 GMT; path=/`;">
+                </button>
+            </div>
+        }
+
         @if (_user.Identity.IsAuthenticated)
         {
             <p id="logged-in-text">Hello <strong>@_user.Claims.Single(c => c.Type == "name").Value!</strong></p>
-            
-            <a href="/account/logout" class="btn btn-primary">Logout</a>
-            <a class="btn btn-primary" onclick="window.location.href = '/account/manage';" style="margin-left: 10px">Manage</a>
-            <a class="btn btn-primary" onclick="window.location.href = '/favourites';" style="margin-left: 10px">Favourites</a>
-            
-            @if(_account?.IsAdmin ?? false)
+
+            <a href="/account/logout" class="btn btn-primary" style="margin-right: 10px">Logout</a>
+            <a class="btn btn-primary" onclick="window.location.href = '/account/manage';" style="margin-right: 10px">Manage</a>
+            <a class="btn btn-primary" onclick="window.location.href = '/favourites';" style="margin-right: 10px">Favourites</a>
+            <a class="btn btn-primary" onclick="window.location.href = '/favorites/profiles';" style="margin-right: 10px">Watched profiles</a>
+
+            @if (_account?.IsAdmin ?? false)
             {
-                <a class="btn btn-primary" onclick="window.location.href = '/account/admin';" style="margin-left: 10px">Admin</a>
+                <a class="btn btn-primary" onclick="window.location.href = '/account/admin';" style="margin-right: 10px">Admin</a>
+                <a class="btn btn-primary" onclick="window.location.href = '/account/admin/notices';" style="margin-right: 10px">Manage notices</a>
             }
         }
         else
@@ -74,13 +85,14 @@
         }
 
         <br/>
-        <a class="btn btn-primary" onclick="window.location.href = '/leaderboard'" style="margin-top: 10px">Leaderboard</a>
-        <a class="btn btn-primary" onclick="window.location.href = '/'" style="margin-left: 10px; margin-top: 10px">Main page</a>
-        <a class="btn btn-primary" onclick="window.location.href = '/downloads'" style="margin-left: 10px; margin-top: 10px">Current downloads</a>
-        <a class="btn btn-primary" onclick="window.location.href = '/changelog'" style="margin-left: 10px; margin-top: 10px">Changelog</a>
+        <a class="btn btn-primary" onclick="window.location.href = '/leaderboard'" style="margin-right: 10px; margin-top: 10px">Leaderboard</a>
+        <a class="btn btn-primary" onclick="window.location.href = '/stats'" style="margin-right: 10px; margin-top: 10px">Stats</a>
+        <a class="btn btn-primary" onclick="window.location.href = '/'" style="margin-right: 10px; margin-top: 10px">Main page</a>
+        <a class="btn btn-primary" onclick="window.location.href = '/downloads'" style="margin-right: 10px; margin-top: 10px">Current downloads</a>
+        <a class="btn btn-primary" onclick="window.location.href = '/changelog'" style="margin-right: 10px; margin-top: 10px">Changelog</a>
 
         <p>Warning: Replays recorded before @ReplayParserService.CutOffDateTime.ToLocalTime().ToString("yyyy-MM-dd") (yyyy-MM-dd) are not supported and are not counted</p>
-        
+
         <hr/>
         @Body
     </main>
@@ -137,9 +149,11 @@
                     if (isFavourited) {
                         icon.removeClass('far');
                         icon.addClass('fas');
+                        button.children().last().text('Remove from favourites');
                     } else {
                         icon.removeClass('fas');
                         icon.addClass('far');
+                        button.children().last().text('Add to favorites');
                     }
 
                     if (reloadOnComplete) {

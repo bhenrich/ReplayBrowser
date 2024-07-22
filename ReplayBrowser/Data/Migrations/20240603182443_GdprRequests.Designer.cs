@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 using NpgsqlTypes;
@@ -13,9 +14,11 @@ using ReplayBrowser.Data;
 namespace Server.Migrations
 {
     [DbContext(typeof(ReplayDbContext))]
-    partial class ReplayDbContextModelSnapshot : ModelSnapshot
+    [Migration("20240603182443_GdprRequests")]
+    partial class GdprRequests
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -23,99 +26,6 @@ namespace Server.Migrations
                 .HasAnnotation("Relational:MaxIdentifierLength", 63);
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
-
-            modelBuilder.Entity("ReplayBrowser.Data.CharacterData", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<string>("CharacterName")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<Guid?>("CollectedPlayerDataPlayerGuid")
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("LastPlayed")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("RoundsPlayed")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CollectedPlayerDataPlayerGuid");
-
-                    b.ToTable("CharacterData");
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.CollectedPlayerData", b =>
-                {
-                    b.Property<Guid>("PlayerGuid")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("uuid");
-
-                    b.Property<DateTime>("GeneratedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<bool>("IsWatched")
-                        .HasColumnType("boolean");
-
-                    b.Property<DateTime>("LastSeen")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("PlayerDataId")
-                        .HasColumnType("integer");
-
-                    b.Property<int>("TotalAntagRoundsPlayed")
-                        .HasColumnType("integer");
-
-                    b.Property<TimeSpan>("TotalEstimatedPlaytime")
-                        .HasColumnType("interval");
-
-                    b.Property<int>("TotalRoundsPlayed")
-                        .HasColumnType("integer");
-
-                    b.HasKey("PlayerGuid");
-
-                    b.HasIndex("PlayerDataId");
-
-                    b.HasIndex("PlayerGuid")
-                        .IsUnique();
-
-                    b.ToTable("PlayerProfiles", (string)null);
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.JobCountData", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<Guid?>("CollectedPlayerDataPlayerGuid")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("JobPrototype")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("LastPlayed")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<int>("RoundsPlayed")
-                        .HasColumnType("integer");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("CollectedPlayerDataPlayerGuid");
-
-                    b.ToTable("JobCountData");
-                });
 
             modelBuilder.Entity("ReplayBrowser.Data.Models.Account.Account", b =>
                 {
@@ -134,10 +44,6 @@ namespace Server.Migrations
 
                     b.Property<bool>("IsAdmin")
                         .HasColumnType("boolean");
-
-                    b.Property<List<Guid>>("SavedProfiles")
-                        .IsRequired()
-                        .HasColumnType("uuid[]");
 
                     b.Property<int>("SettingsId")
                         .HasColumnType("integer");
@@ -215,33 +121,6 @@ namespace Server.Migrations
                     b.HasKey("Guid");
 
                     b.ToTable("GdprRequests", (string)null);
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.Models.Notice", b =>
-                {
-                    b.Property<int?>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int?>("Id"));
-
-                    b.Property<DateTime>("EndDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Message")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("StartDate")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Title")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("Notices", (string)null);
                 });
 
             modelBuilder.Entity("ReplayBrowser.Data.Models.ParsedReplay", b =>
@@ -333,10 +212,8 @@ namespace Server.Migrations
                         .HasColumnType("text");
 
                     b.Property<string>("Map")
+                        .IsRequired()
                         .HasColumnType("text");
-
-                    b.Property<List<string>>("Maps")
-                        .HasColumnType("text[]");
 
                     b.Property<string>("RoundEndText")
                         .HasColumnType("text");
@@ -381,51 +258,6 @@ namespace Server.Migrations
                     b.ToTable("Replays", (string)null);
                 });
 
-            modelBuilder.Entity("ReplayBrowser.Data.PlayerData", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<Guid?>("PlayerGuid")
-                        .HasColumnType("uuid");
-
-                    b.Property<string>("Username")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.HasKey("Id");
-
-                    b.ToTable("PlayerData");
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.CharacterData", b =>
-                {
-                    b.HasOne("ReplayBrowser.Data.CollectedPlayerData", null)
-                        .WithMany("Characters")
-                        .HasForeignKey("CollectedPlayerDataPlayerGuid");
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.CollectedPlayerData", b =>
-                {
-                    b.HasOne("ReplayBrowser.Data.PlayerData", "PlayerData")
-                        .WithMany()
-                        .HasForeignKey("PlayerDataId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("PlayerData");
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.JobCountData", b =>
-                {
-                    b.HasOne("ReplayBrowser.Data.CollectedPlayerData", null)
-                        .WithMany("JobCount")
-                        .HasForeignKey("CollectedPlayerDataPlayerGuid");
-                });
-
             modelBuilder.Entity("ReplayBrowser.Data.Models.Account.Account", b =>
                 {
                     b.HasOne("ReplayBrowser.Data.Models.Account.AccountSettings", "Settings")
@@ -451,13 +283,6 @@ namespace Server.Migrations
                         .HasForeignKey("ReplayId");
 
                     b.Navigation("Replay");
-                });
-
-            modelBuilder.Entity("ReplayBrowser.Data.CollectedPlayerData", b =>
-                {
-                    b.Navigation("Characters");
-
-                    b.Navigation("JobCount");
                 });
 
             modelBuilder.Entity("ReplayBrowser.Data.Models.Account.Account", b =>

@@ -1,7 +1,6 @@
 ﻿using System.Diagnostics;
 using Microsoft.AspNetCore.Components.Authorization;
 using Microsoft.EntityFrameworkCore;
-using Microsoft.EntityFrameworkCore.Query;
 using Microsoft.Extensions.Caching.Memory;
 using ReplayBrowser.Data;
 using ReplayBrowser.Data.Models;
@@ -30,6 +29,7 @@ public class ReplayHelper
     public async Task<List<Replay>> GetMostRecentReplays(AuthenticationState state)
     {
         var replays = await _context.Replays
+            .AsNoTracking()
             .OrderByDescending(r => r.Date)
             .Include(r => r.RoundEndPlayers)
             .Take(32)
@@ -46,33 +46,74 @@ public class ReplayHelper
             Details = string.Empty
         });
         
+        for (var i = 0; i < replays.Count; i++)
+        {
+            var replay = replays[i];
+            PopulateExtendedFields(ref replay);
+            replays[i] = replay;
+        }
+        
         return replays;
     }
 
-    public async Task<CollectedPlayerData?> GetPlayerProfile(Guid playerGuid, AuthenticationState authenticationState)
+    /// <summary>
+    /// Fetches a player profile from the database.
+    /// </summary>
+    /// <exception cref="UnauthorizedAccessException">Thrown when the account is private and the requestor is not the account owner or an admin.</exception>
+    public async Task<CollectedPlayerData?> GetPlayerProfile(Guid playerGuid, AuthenticationState authenticationState, bool skipPermsCheck = false)
     {
         var accountCaller = await _accountService.GetAccount(authenticationState);
         
         var accountRequested = _accountService.GetAccountSettings(playerGuid);
-        
-        if (accountRequested is { RedactInformation: true })
+
+        if (!skipPermsCheck)
         {
-            if (accountCaller == null || !accountCaller.IsAdmin)
+            if (accountRequested is { RedactInformation: true })
             {
-                if (accountCaller?.Guid != playerGuid)
+                if (accountCaller == null || !accountCaller.IsAdmin)
                 {
-                    throw new UnauthorizedAccessException("The account you are trying to view is private. Contact the account owner and ask them to make their account public.");
+                    if (accountCaller?.Guid != playerGuid)
+                    {
+                        throw new UnauthorizedAccessException("The account you are trying to view is private. Contact the account owner and ask them to make their account public.");
+                    }
                 }
             }
         }
-
-        var replays = (await _context.Players
-            .Where(p => p.PlayerGuid == playerGuid)
-            .Include(p => p.Replay)
-            .Include(r => r.Replay.RoundEndPlayers)
-            .Select(p => p.Replay)
-            .ToListAsync()
-            ).DistinctBy(p => p.Id);
+        
+        if (!skipPermsCheck)
+        {
+            await _accountService.AddHistory(accountCaller, new HistoryEntry()
+            {
+                Action = Enum.GetName(typeof(Action), Action.ProfileViewed) ?? "Unknown",
+                Time = DateTime.UtcNow,
+                Details = $"Player GUID: {playerGuid} Username: {(await _apiHelper.FetchPlayerDataFromGuid(playerGuid)).Username ?? "Unknown"}"
+            });
+        }
+        
+        // first check for the db cache
+        if (_context.PlayerProfiles.Any(p => p.PlayerGuid == playerGuid) && !skipPermsCheck)
+        {
+            var profile = await _context.PlayerProfiles
+                .Include(p => p.Characters)
+                .Include(p => p.JobCount)
+                .Include(p => p.PlayerData)
+                .FirstOrDefaultAsync(p => p.PlayerGuid == playerGuid);
+            
+            if (profile != null)
+            {
+                profile.IsWatched = accountCaller?.SavedProfiles.Contains(playerGuid) ?? false;
+                
+                return profile;
+            }
+        }
+        
+        var replays = await _context.Replays
+            .AsNoTracking()
+            .Include(r => r.RoundEndPlayers)
+            .Where(r => r.RoundEndPlayers != null)
+            .Where(r => r.RoundEndPlayers!.Any(p => p.PlayerGuid == playerGuid))
+            .Distinct() // only need one instance of each replay
+            .ToListAsync();
 
         var charactersPlayed = new List<CharacterData>();
         var totalPlaytime = TimeSpan.Zero;
@@ -83,14 +124,14 @@ public class ReplayHelper
         
         foreach (var replay in replays)
         {
-            if (replay == null)
-            {
-                Log.Warning("Replay is null for player with GUID {PlayerGuid}", playerGuid);
-                continue;
-            }
-            
             if (replay.RoundEndPlayers == null)
                 continue;
+            
+            if (replay.Date == null)
+            {
+                Log.Warning("Replay with ID {ReplayId} has no date", replay.Id);
+                continue;
+            }
             
             if (replay.Date > lastSeen) // Update last seen
             {
@@ -189,20 +230,20 @@ public class ReplayHelper
                 Username = (await _apiHelper.FetchPlayerDataFromGuid(playerGuid))?.Username ??
                            "Unable to fetch username (API error)"
             },
+            PlayerGuid = playerGuid,
             Characters = charactersPlayed,
             TotalEstimatedPlaytime = totalPlaytime,
             TotalRoundsPlayed = totalRoundsPlayed.Count,
             TotalAntagRoundsPlayed = totalAntagRoundsPlayed.Count,
             LastSeen = lastSeen,
-            JobCount = jobCount
+            JobCount = jobCount,
+            GeneratedAt = DateTime.UtcNow
         };
         
-        await _accountService.AddHistory(accountCaller, new HistoryEntry()
+        if (accountCaller != null)
         {
-            Action = Enum.GetName(typeof(Action), Action.ProfileViewed) ?? "Unknown",
-            Time = DateTime.UtcNow,
-            Details = $"Player GUID: {playerGuid} Username: {collectedPlayerData.PlayerData.Username}"
-        });
+            collectedPlayerData.IsWatched = accountCaller.SavedProfiles.Contains(playerGuid);
+        }
         
         return collectedPlayerData;
     }
@@ -235,6 +276,7 @@ public class ReplayHelper
     public async Task<Replay?> GetReplay(int id, AuthenticationState authstate)
     {
         var replay = await _context.Replays
+            .AsNoTracking()
             .Include(r => r.RoundEndPlayers)
             .FirstOrDefaultAsync(r => r.Id == id);
         
@@ -243,11 +285,15 @@ public class ReplayHelper
 
         var caller = await _accountService.GetAccount(authstate);
         replay = FilterReplay(replay, caller);
+        PopulateExtendedFields(ref replay);
         return replay;
     }
     
     private Replay FilterReplay(Replay replay, Account? caller = null)
     {
+        if (replay.RoundEndPlayers == null)
+            return replay;
+        
         foreach (var replayRoundEndPlayer in replay.RoundEndPlayers)
         {
             var accountForPlayer = _accountService.GetAccountSettings(replayRoundEndPlayer.PlayerGuid);
@@ -276,68 +322,83 @@ public class ReplayHelper
         return replay;
     }
 
-    public async Task<SearchResult> SearchReplays(SearchMode searchMode, string query, int page, AuthenticationState authenticationState)
+    public async Task<SearchResult> SearchReplays(List<SearchQueryItem> searchItems, int page, AuthenticationState authenticationState)
     {
         var callerAccount = await _accountService.GetAccount(authenticationState);
         
-        switch (searchMode)
+        foreach (var searchQueryItem in searchItems.Where(x => x.SearchModeEnum == SearchMode.PlayerOocName))
         {
-            case SearchMode.Guid:
-                var foundGuidAccount = _context.Accounts
-                    .Include(a => a.Settings)
-                    .FirstOrDefault(a => a.Guid.ToString().ToLower().Contains(query.ToLower()));
+            var query = searchQueryItem.SearchValue;
                 
-                if (foundGuidAccount != null && foundGuidAccount.Settings.RedactInformation)
+            var foundOocAccount = _context.Accounts
+                .Include(a => a.Settings)
+                .FirstOrDefault(a => a.Username.ToLower().Equals(query.ToLower()));
+
+            if (callerAccount != null)
+            {
+                if (!callerAccount.Username.ToLower().Equals(query, StringComparison.OrdinalIgnoreCase))
                 {
-                    if (callerAccount != null)
+                    if (foundOocAccount != null && foundOocAccount.Settings.RedactInformation)
                     {
-                        if (callerAccount.Guid == foundGuidAccount.Guid)
+                        if (callerAccount == null || !callerAccount.IsAdmin)
                         {
-                            break;
+                            throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
                         }
                     }
-                    
-                    // if the requestor is not the found account and the requestor is not an admin, deny access
-                    if (callerAccount == null || !callerAccount.IsAdmin)
-                    {
-                        throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
-                    }
                 }
-                break;
+            } else if (foundOocAccount != null && foundOocAccount.Settings.RedactInformation)
+            {
+                throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
+            }
+        }
+        
+        foreach (var searchQueryItem in searchItems.Where(x => x.SearchModeEnum == SearchMode.Guid))
+        {
+            var query = searchQueryItem.SearchValue;
             
-            case SearchMode.PlayerOocName:
-                var foundOocAccount = _context.Accounts
-                    .Include(a => a.Settings)
-                    .FirstOrDefault(a => a.Username.ToLower().Equals(query.ToLower()));
-
+            var foundGuidAccount = _context.Accounts
+                .Include(a => a.Settings)
+                .FirstOrDefault(a => a.Guid.ToString().ToLower().Contains(query.ToLower()));
+            
+            if (foundGuidAccount != null && foundGuidAccount.Settings.RedactInformation)
+            {
                 if (callerAccount != null)
                 {
-                    if (callerAccount.Username.ToLower().Equals(query, StringComparison.OrdinalIgnoreCase))
+                    if (callerAccount.Guid != foundGuidAccount.Guid)
                     {
-                        break;
+                        // if the requestor is not the found account and the requestor is not an admin, deny access
+                        if (callerAccount == null || !callerAccount.IsAdmin)
+                        {
+                            throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
+                        }
                     }
-                }
-                
-                if (foundOocAccount != null && foundOocAccount.Settings.RedactInformation)
+                } else
                 {
-                    if (callerAccount == null || !callerAccount.IsAdmin)
-                    {
-                        throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
-                    }
+                    throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
                 }
-                break;
+            } else if (foundGuidAccount != null && foundGuidAccount.Settings.RedactInformation)
+            {
+                throw new UnauthorizedAccessException("The account you are trying to search for is private. Contact the account owner and ask them to make their account public.");
+            }
         }
 
         await _accountService.AddHistory(callerAccount, new HistoryEntry()
         {
             Action = Enum.GetName(typeof(Action), Action.SearchPerformed) ?? "Unknown",
             Time = DateTime.UtcNow,
-            Details = $"Mode: {searchMode}, Query: {query}"
+            Details = string.Join(", ", searchItems.Select(x => $"{x.SearchMode}={x.SearchValue}"))
         });
         
-        var found = SearchReplays(searchMode, query, page, Constants.ReplaysPerPage);
+        var found = SearchReplays(searchItems, page, Constants.ReplaysPerPage);
         var pageCount = (int) Math.Ceiling((double) found.results / Constants.ReplaysPerPage);
         var replays = FilterReplays(found.Item1, callerAccount?.Guid);
+        
+        for (var i = 0; i < replays.Count; i++)
+        {
+            var replay = replays[i];
+            PopulateExtendedFields(ref replay);
+            replays[i] = replay;
+        }
         
         return new SearchResult()
         {
@@ -346,8 +407,7 @@ public class ReplayHelper
             CurrentPage = page,
             TotalReplays = found.Item2,
             IsCache = found.Item3,
-            SearchMode = searchMode,
-            Query = query
+            SearchItems = searchItems
         };
     }
 
@@ -384,21 +444,18 @@ public class ReplayHelper
         };
     }
     
-        /// <summary>
+    /// <summary>
     /// Searches a list of replays for a specific query.
     /// </summary>
-    /// <param name="mode">The search mode.</param>
-    /// <param name="query">The search query.</param>
-    /// <param name="replays">The list of replays to search.</param>
     /// <returns>
     /// A list of replays that match the search query.
     /// </returns>
     /// <exception cref="NotImplementedException">
     /// Thrown when the search mode is not implemented.
     /// </exception>
-    private (List<Replay> replays, int results, bool wasCache) SearchReplays(SearchMode mode, string query, int page, int pageSize)
+    private (List<Replay> replays, int results, bool wasCache) SearchReplays(List<SearchQueryItem> searchItems, int page, int pageSize)
     {
-        var cacheKey = $"{mode}-{query}-{pageSize}";
+        var cacheKey = $"{string.Join("-", searchItems.Select(x => $"{x.SearchMode}-{x.SearchValue}"))}-{pageSize}";
         if (_cache.TryGetValue(cacheKey, out List<(List<Replay>, int)> cachedResult))
         {
             if (page < cachedResult.Count)
@@ -410,62 +467,51 @@ public class ReplayHelper
 
         var stopWatch = new Stopwatch();
         stopWatch.Start();
-        var queryable = _context.Replays.AsQueryable();
+        var queryable = _context.Replays
+            .AsNoTracking()
+            .Include(r => r.RoundEndPlayers).AsQueryable();
 
-        
-        IIncludableQueryable<Player, Replay?>? players;
-        IQueryable<int?>? replayIds;
-        switch (mode)
+        foreach (var searchItem in searchItems)
         {
-            case SearchMode.Map:
-                queryable = queryable.Where(x => x.Map.ToLower().Contains(query.ToLower()));
-                break;
-            case SearchMode.Gamemode:
-                queryable = queryable.Where(x => x.Gamemode.ToLower().Contains(query.ToLower()));
-                break;
-            case SearchMode.ServerId:
-                queryable = queryable.Where(x => x.ServerId.ToLower().Contains(query.ToLower()));
-                break;
-            case SearchMode.Guid:
-                players = _context.Players
-                    .Where(p => p.PlayerGuid.ToString().ToLower().Contains(query.ToLower()))
-                    .Include(p => p.Replay);
-                replayIds = players.Select(p => p.ReplayId).Distinct();
-                queryable = _context.Replays.Where(r => replayIds.Contains(r.Id));
-                break;
-            case SearchMode.PlayerIcName:
-                players = _context.Players
-                    .Where(p => p.PlayerIcName.ToLower().Contains(query.ToLower()))
-                    .Include(p => p.Replay);
-                replayIds = players.Select(p => p.ReplayId).Distinct();
-                queryable = _context.Replays.Where(r => replayIds.Contains(r.Id));
-                break;
-            case SearchMode.PlayerOocName:
-                players = _context.Players
-                    .Where(p => p.PlayerOocName.ToLower().Contains(query.ToLower()))
-                    .Include(p => p.Replay);
-                replayIds = players.Select(p => p.ReplayId).Distinct();
-                queryable = _context.Replays.Where(r => replayIds.Contains(r.Id));
-                break;
-            case SearchMode.RoundEndText:
-                // ReSharper disable once EntityFramework.UnsupportedServerSideFunctionCall (its lying, this works)
-                queryable = queryable.Where(x => x.RoundEndTextSearchVector.Matches(query));
-                break;
-            case SearchMode.ServerName:
-                queryable = queryable.Where(x => x.ServerName != null && x.ServerName.ToLower().Contains(query.ToLower()));
-                break;
-            case SearchMode.RoundId:
-                queryable = queryable.Where(x => x.RoundId != null && x.RoundId.ToString().Contains(query));
-                break;
-            default:
-                throw new NotImplementedException();
+            switch (searchItem.SearchModeEnum)
+            {
+                case SearchMode.Map:
+                    queryable = queryable.Where(x => x.Map.ToLower().Contains(searchItem.SearchValue.ToLower()) || x.Maps.Contains(searchItem.SearchValue.ToLower()));
+                    break;
+                case SearchMode.Gamemode:
+                    queryable = queryable.Where(x => x.Gamemode.ToLower().Contains(searchItem.SearchValue.ToLower()));
+                    break;
+                case SearchMode.ServerId:
+                    queryable = queryable.Where(x => x.ServerId.ToLower().Contains(searchItem.SearchValue.ToLower()));
+                    break;
+                case SearchMode.Guid:
+                    queryable = queryable.Where(r => r.RoundEndPlayers.Where(p => p.PlayerGuid.ToString().ToLower().Contains(searchItem.SearchValue.ToLower())).Count() > 0);
+                    break;
+                case SearchMode.PlayerIcName:
+                    queryable = queryable.Where(r => r.RoundEndPlayers.Where(p => p.PlayerIcName.ToLower().Contains(searchItem.SearchValue.ToLower())).Count() > 0);
+                    break;
+                case SearchMode.PlayerOocName:
+                    queryable = queryable.Where(r => r.RoundEndPlayers.Where(p => p.PlayerOocName.ToLower().Contains(searchItem.SearchValue.ToLower())).Count() > 0);
+                    break;
+                case SearchMode.RoundEndText:
+                    // ReSharper disable once EntityFramework.UnsupportedServerSideFunctionCall (its lying, this works)
+                    queryable = queryable.Where(x => x.RoundEndTextSearchVector.Matches(searchItem.SearchValue));
+                    break;
+                case SearchMode.ServerName:
+                    queryable = queryable.Where(x => x.ServerName != null && x.ServerName.ToLower().Contains(searchItem.SearchValue.ToLower()));
+                    break;
+                case SearchMode.RoundId:
+                    queryable = queryable.Where(x => x.RoundId != null && x.RoundId.ToString().Contains(searchItem.SearchValue));
+                    break;
+                default:
+                    throw new NotImplementedException();
+            }
         }
     
         var totalItems = queryable.Count();
 
         // Get all results and store them in the cache
         var allResults = queryable
-            .Include(r => r.RoundEndPlayers)
             .OrderByDescending(r => r.Date ?? DateTime.MinValue)
             .Take(Constants.SearchLimit)
             .ToList();
@@ -481,7 +527,7 @@ public class ReplayHelper
             paginatedResults.Add((paginatedList, totalItems));
         }
 
-        _cache.Set(cacheKey, paginatedResults, TimeSpan.FromMinutes(5));
+        _cache.Set(cacheKey, paginatedResults, TimeSpan.FromMinutes(35));
 
         stopWatch.Stop();
         Log.Information("Search took " + stopWatch.ElapsedMilliseconds + "ms.");
@@ -508,5 +554,10 @@ public class ReplayHelper
             .ToListAsync();
 
         return FilterReplays(replays, account.Guid);
+    }
+
+    private void PopulateExtendedFields(ref Replay replay)
+    {
+        // Nothing yet.
     }
 }

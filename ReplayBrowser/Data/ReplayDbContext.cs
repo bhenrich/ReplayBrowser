@@ -51,10 +51,34 @@ public class ReplayDbContext : DbContext
         modelBuilder.Entity<Account>()
             .HasIndex(a => a.Username);
         
+        modelBuilder.Entity<GdprRequest>()
+            .HasKey(g => g.Guid);
+        
+        modelBuilder.Entity<Notice>()
+            .HasKey(n => n.Id);
+
+        modelBuilder.Entity<CollectedPlayerData>()
+            .HasKey(p => p.PlayerGuid);
+        modelBuilder.Entity<CollectedPlayerData>()
+            .HasIndex(p => p.PlayerGuid)
+            .IsUnique();
+        
+        modelBuilder.Entity<JobCountData>()
+            .HasKey(j => j.Id);
+
+        modelBuilder.Entity<CharacterData>()
+            .HasKey(c => c.Id);
+        
+        modelBuilder.Entity<PlayerData>()
+            .HasKey(p => p.Id);
+        
         modelBuilder.Entity<Replay>().ToTable("Replays");
         modelBuilder.Entity<Player>().ToTable("Players");
         modelBuilder.Entity<ParsedReplay>().ToTable("ParsedReplays");
         modelBuilder.Entity<Account>().ToTable("Accounts");
+        modelBuilder.Entity<GdprRequest>().ToTable("GdprRequests");
+        modelBuilder.Entity<Notice>().ToTable("Notices");
+        modelBuilder.Entity<CollectedPlayerData>().ToTable("PlayerProfiles");
     }
     
     public DbSet<Replay> Replays { get; set; }
@@ -67,4 +91,20 @@ public class ReplayDbContext : DbContext
     public DbSet<ParsedReplay> ParsedReplays { get; set; }
     
     public DbSet<Account> Accounts { get; set; }
+    
+    /// <summary>
+    /// Contains a list of GUIDs that have requested their data to be removed. Future replays will have this player replaced with "Removed by GDPR request".
+    /// </summary>
+    public DbSet<GdprRequest> GdprRequests { get; set; }
+    
+    /// <summary>
+    /// Contains a list of notices that are displayed to every user if the condition is met.
+    /// </summary>
+    public DbSet<Notice> Notices { get; set; }
+    
+    /// <summary>
+    /// Cached player data.
+    /// </summary>
+    /// <returns></returns>
+    public DbSet<CollectedPlayerData> PlayerProfiles { get; set; }
 }

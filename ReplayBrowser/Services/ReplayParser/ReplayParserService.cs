@@ -27,6 +27,11 @@ public class ReplayParserService : IHostedService, IDisposable
 
     public CancellationTokenSource TokenSource = new();
     
+    /// <summary>
+    /// Event that is fired when all replays have been parsed.
+    /// </summary>
+    public event EventHandler<List<Replay>> OnReplaysFinishedParsing;
+    
     private readonly IConfiguration _configuration;
     private readonly IServiceScopeFactory _factory;
     
@@ -107,6 +112,7 @@ public class ReplayParserService : IHostedService, IDisposable
         
         var total = Queue.Count;
         var completed = 0;
+        var parsedReplays = new List<Replay>();
         
         // Consume the queue.
         while (Queue.Count > 0)
@@ -161,15 +167,22 @@ public class ReplayParserService : IHostedService, IDisposable
                         }
                         // See if the link matches the date regex, if it does set the date
                         var replayFileName = Path.GetFileName(replay);
-                        var match = RegexList.ReplayRegex.Match(replayFileName);
+                        var storageUrl = GetStorageUrlFromReplayLink(replay);
+                        var match = storageUrl.ReplayRegexCompiled.Match(replayFileName);
                         if (match.Success)
                         {
-                            var date = DateTime.ParseExact(match.Groups[1].Value, "yyyy_MM_dd-HH_mm", CultureInfo.InvariantCulture);
-                            // Need to mark it as UTC, since the server is in UTC.
-                            parsedReplay.Date = date.ToUniversalTime();
+                            try
+                            {
+                                var date = DateTime.ParseExact(match.Groups[1].Value, "yyyy_MM_dd-HH_mm", CultureInfo.InvariantCulture);
+                                // Need to mark it as UTC, since the server is in UTC.
+                                parsedReplay.Date = date.ToUniversalTime();
+                            }
+                            catch (FormatException e)
+                            {
+                                var date = DateTime.ParseExact(match.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                                parsedReplay.Date = date.ToUniversalTime();
+                            }
                         }
-                        
-                        DownloadProgress.TryRemove(replay, out _);
                         
                         // One more check to see if it's already in the database.
                         if (await IsReplayParsed(replay))
@@ -179,6 +192,7 @@ public class ReplayParserService : IHostedService, IDisposable
                             
                         await AddReplayToDb(parsedReplay);
                         await AddParsedReplayToDb(replay);
+                        parsedReplays.Add(parsedReplay);
                         Log.Information("Parsed " + replay);
                     }
                     catch (Exception e)
@@ -200,6 +214,8 @@ public class ReplayParserService : IHostedService, IDisposable
                 Log.Warning("Parsing took too long for " + string.Join(", ", tasks.Select(x => x.Id)));
             }
         }
+        
+        OnReplaysFinishedParsing?.Invoke(this, parsedReplays);
     }
     
     /// <summary>
@@ -223,7 +239,7 @@ public class ReplayParserService : IHostedService, IDisposable
             .IgnoreUnmatchedProperties()
             .Build();
         var replay = deserializer.Deserialize<Replay>(reader);
-        if (replay.Map == null)
+        if (replay.Map == null && replay.Maps == null)
         {
             throw new Exception("Replay is not valid.");
         }
@@ -241,21 +257,55 @@ public class ReplayParserService : IHostedService, IDisposable
             replay.ServerName = replayUrls.First(x => replay.Link!.Contains(x.Url)).FallBackServerName;
         }
         
+        // Check for GDPRed accounts
+        var gdprGuids = GetDbContext().GdprRequests.Select(x => x.Guid).ToList();
+        if (replay.RoundEndPlayers != null)
+        {
+            foreach (var player in replay.RoundEndPlayers)
+            {
+                if (gdprGuids.Contains(player.PlayerGuid))
+                {
+                    player.RedactInformation(true);
+                }
+            }
+        }
+        
         return replay;
     }
 
+    public StorageUrl GetStorageUrlFromReplayLink(string replayLink)
+    {
+        var replayUrls = _configuration.GetSection("ReplayUrls").Get<StorageUrl[]>()!;
+        var fetched = replayUrls.First(x => replayLink.Contains(x.Url));
+        fetched.CompileRegex();
+        return fetched;
+    }
+    
     public async Task AddReplayToQueue(string replay)
     {
         // Use regex to check and retrieve the date from the file name.
+        var storageUrl = GetStorageUrlFromReplayLink(replay);
         var fileName = Path.GetFileName(replay);
-        var match = RegexList.ReplayRegex.Match(fileName);
+        var match = storageUrl.ReplayRegexCompiled.Match(fileName);
         if (match.Success)
         {
-            var date = DateTime.ParseExact(match.Groups[1].Value, "yyyy_MM_dd-HH_mm", CultureInfo.InvariantCulture);
-            if (date < CutOffDateTime)
+            try
             {
-                return;
+                var date = DateTime.ParseExact(match.Groups[1].Value, "yyyy_MM_dd-HH_mm", CultureInfo.InvariantCulture);
+                if (date < CutOffDateTime)
+                {
+                    return;
+                }
             }
+            catch (FormatException e)
+            {
+                var date = DateTime.ParseExact(match.Groups[1].Value, "yyyy-MM-dd", CultureInfo.InvariantCulture);
+                if (date < CutOffDateTime)
+                {
+                    return;
+                }
+            }
+
         } else
         {
             Log.Warning("Replay " + replay + " does not match the regex.");

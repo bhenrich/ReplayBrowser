@@ -4,10 +4,13 @@
 @using Microsoft.AspNetCore.Components.Authorization
 @using ReplayBrowser.Data
 @using ReplayBrowser.Services
+@using Microsoft.AspNetCore.Components.Web
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject AccountService AccountService
 @inject NavigationManager NavigationManager
 @attribute [Authorize]
+
+<PageTitle>Logs</PageTitle>
 
 <h3>Logs</h3>
 <div class="search-bar">
@@ -37,6 +40,10 @@
         var username = document.getElementById("search").value;
         window.location.href = "/account/logs?username=" + username;
     }
+
+    $(document).ready(function () {
+        $('#search').autocomplete();
+    });
 </script>
 
 @if(Is1984)

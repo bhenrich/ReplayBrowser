@@ -1,11 +1,19 @@
-﻿namespace ReplayBrowser.Data;
+﻿using System.Text.Json.Serialization;
+
+namespace ReplayBrowser.Data;
 
 /// <summary>
 /// Represents a player's data over all replays.
 /// </summary>
 public class CollectedPlayerData
 {
-    public PlayerData PlayerData { get; init; } = new();
+    [JsonIgnore]
+    public DateTime GeneratedAt { get; set; } = DateTime.Now;
+    
+    [JsonIgnore]
+    public Guid PlayerGuid { get; set; }
+    
+    public PlayerData PlayerData { get; set; } = new();
 
     /// <summary>
     /// Characters played by the player
@@ -15,21 +23,26 @@ public class CollectedPlayerData
     /// <summary>
     /// Represents the estimated total playtime of the player. This is calculated by summing the roundtime of all replays the player has played.
     /// </summary>
-    public TimeSpan TotalEstimatedPlaytime { get; init; }
+    public TimeSpan TotalEstimatedPlaytime { get; set; }
     
     /// <summary>
     /// Represents the total amount of rounds the player has played.
     /// </summary>
-    public int TotalRoundsPlayed { get; init; }
+    public int TotalRoundsPlayed { get; set; }
     
     /// <summary>
     /// Represents the total amount of antag rounds the player has played.
     /// </summary>
-    public int TotalAntagRoundsPlayed { get; init; }
+    public int TotalAntagRoundsPlayed { get; set; }
     
     public List<JobCountData> JobCount { get; set; } = new();
     
     public DateTime LastSeen { get; set; } = DateTime.MinValue;
+    
+    /// <summary>
+    /// Is this profile currently being "watched" by the user?
+    /// </summary>
+    public bool IsWatched { get; set; } = false;
     
     public override bool Equals(object? obj)
     {
@@ -49,6 +62,7 @@ public class CollectedPlayerData
 
 public class CharacterData
 {
+    public int Id { get; set; }
     public string CharacterName { get; set; }
     public DateTime LastPlayed { get; set; } = DateTime.MinValue;
     public int RoundsPlayed { get; set; }
@@ -56,6 +70,8 @@ public class CharacterData
 
 public class JobCountData
 {
+    public int Id { get; set; }
+    
     public string JobPrototype { get; set; }
     public int RoundsPlayed { get; set; }
     public DateTime LastPlayed { get; set; } = DateTime.MinValue;

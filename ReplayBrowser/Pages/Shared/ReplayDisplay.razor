@@ -3,14 +3,23 @@
 @using ReplayBrowser.Data.Models
 @using ReplayBrowser.Helpers
 @using ReplayBrowser.Services
+@using ReplayBrowser.Services.ReplayParser
 @inject AuthenticationStateProvider AuthenticationStateProvider
 @inject ReplayHelper ReplayHelper
 @inject AccountService AccountService
+@inject ReplayParserService ReplayParserService
 
 <div class="card" style="width: 18rem; margin-top: 1rem">
     <div class="card-body">
         <h5 class="card-title">@_nameFormatted</h5>
-        <p class="card-text">Map: @ReplayData.Map</p>
+        @if (ReplayData.Map == null)
+        {
+        <p>Maps: @string.Join(',', ReplayData.Maps)</p>
+        }
+        else
+        {
+        <p>Map: @ReplayData.Map</p>
+        }
         <p class="card-text">Gamemode: @ReplayData.Gamemode</p>
         @if (ReplayData.RoundEndPlayers == null || ReplayData.RoundEndText == null)
         {
@@ -18,19 +27,21 @@
         }
     </div>
     <div class="card-footer">
-        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#r-@ReplayData.Id">
+        <button type="button" class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#r-@ReplayData.Id" style="margin-right: 0.1rem">
             View replay
         </button>
-        <a class="btn btn-secondary" href="/replay/@ReplayData.Id" target="_blank">View in new tab</a>
+        <a class="btn btn-secondary" style="margin-right: 0.1rem" href="/replay/@ReplayData.Id" target="_blank">View in new tab</a>
         
-        <button class="btn btn-outline-danger" style="float: right; margin-top: 10px" id="favorite-button-@ReplayData.Id" onclick="FavouriteReplay(@ReplayData.Id, @ReloadOnFavourite.ToString().ToLower())">
+        <button class="btn btn-outline-danger" style="float: right; margin-top: 10px; margin-right: 0;" id="favorite-button-@ReplayData.Id" onclick="FavouriteReplay(@ReplayData.Id, @ReloadOnFavourite.ToString().ToLower())">
             @if (ReplayData.IsFavorite)
             {
                 <i class="fas fa-star"></i>
+                <p>Remove from favorites</p>
             }
             else
             {
                 <i class="far fa-star"></i>
+                <p>Add to favorites</p>
             }
         </button>
     </div>
@@ -68,11 +79,20 @@
         {
             return;
         }
-        var matchName = RegexList.ServerNameRegex.Match(fileName);
-        var matchDate = RegexList.ReplayRegex.Match(fileName);
+        var storageUrl = ReplayParserService.GetStorageUrlFromReplayLink(ReplayData.Link);
+        var matchName = storageUrl.ServerNameRegexCompiled.Match(fileName);
+        var matchDate = storageUrl.ReplayRegexCompiled.Match(fileName);
         if (matchName.Success && matchDate.Success)
         {
-            _nameFormatted = $"{matchName.Groups[1].Value} - {matchDate.Groups[1].Value}";
+            if (string.IsNullOrWhiteSpace(matchName.Groups[1].Value)) 
+            {
+                // wut? Fallback to server id
+                _nameFormatted = $"{ReplayData.ServerId} - {matchDate.Groups[1].Value}";
+            }
+            else
+            {
+                _nameFormatted = $"{matchName.Groups[1].Value} - {matchDate.Groups[1].Value}";
+            }
         }
         else
         { 
